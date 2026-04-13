@@ -194,15 +194,19 @@ impl<const N: usize> PingCache<N> {
         remote_node: &(Pubkey, SocketAddr),
         now: Instant,
     ) -> Option<CrdsValue> {
-        if let Some((deferred_at, _)) = self.deferred_contact_infos.peek(remote_node)
-            && now.saturating_duration_since(*deferred_at) > DEFERRED_CONTACT_INFO_TTL
-        {
-            self.deferred_contact_infos.pop(remote_node);
-            return None;
-        }
         self.deferred_contact_infos
             .pop(remote_node)
-            .map(|(_deferred_at, value)| value)
+            .and_then(|(deferred_at, value)| {
+                if now.saturating_duration_since(deferred_at) > DEFERRED_CONTACT_INFO_TTL {
+                    None
+                } else {
+                    Some(value)
+                }
+            })
+    }
+
+    pub fn get_deferred_contact_len(&self) -> usize {
+        self.deferred_contact_infos.len()
     }
 
     #[cfg(test)]

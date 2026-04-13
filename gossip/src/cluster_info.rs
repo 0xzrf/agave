@@ -2500,6 +2500,10 @@ fn verify_gossip_addr<R: Rng + CryptoRng>(
     let (out, ping) = {
         let node = (*pubkey, addr);
         let mut ping_cache = ping_cache.lock().unwrap();
+        trace!(
+            "deferred_contact_info length: {}",
+            ping_cache.get_deferred_contact_len()
+        );
         let now = Instant::now();
         let (out, ping) = ping_cache.check(rng, keypair, now, node);
         if !out && ping.is_some() {
