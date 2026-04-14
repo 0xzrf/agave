@@ -209,6 +209,14 @@ impl ClusterInfo {
         &self.socket_addr_space
     }
 
+    pub(crate) fn deferred_contact_info_len(&self) -> Option<usize> {
+        match self.ping_cache.try_lock() {
+            Ok(ping_cache) => Some(ping_cache.get_deferred_contact_len()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+            Err(std::sync::TryLockError::Poisoned(_)) => None,
+        }
+    }
+
     pub fn set_bind_ip_addrs(&mut self, ip_addrs: Arc<BindIpAddrs>) {
         self.bind_ip_addrs = ip_addrs;
     }
@@ -2500,10 +2508,6 @@ fn verify_gossip_addr<R: Rng + CryptoRng>(
     let (out, ping) = {
         let node = (*pubkey, addr);
         let mut ping_cache = ping_cache.lock().unwrap();
-        trace!(
-            "deferred_contact_info length: {}",
-            ping_cache.get_deferred_contact_len()
-        );
         let now = Instant::now();
         let (out, ping) = ping_cache.check(rng, keypair, now, node);
         if !out && ping.is_some() {
