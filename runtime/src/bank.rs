@@ -1094,6 +1094,7 @@ struct NewEpochBundle {
     rewards_calculation: Arc<PartitionedRewardsCalculation>,
     calculate_activated_stake_time_us: u64,
     update_rewards_with_thread_pool_time_us: u64,
+    vat_filterred_vote_accounts: VoteAccounts,
 }
 
 impl Bank {
@@ -1224,7 +1225,7 @@ impl Bank {
         // genesis needs stakes for all epochs up to the epoch implied by
         //  slot = 0 and genesis configuration
         {
-            let stakes = bank.get_top_epoch_stakes();
+            let stakes = bank.get_top_epoch_stakes(None);
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             for epoch in 0..=bank.get_leader_schedule_epoch(bank.slot) {
                 bank.epoch_stakes
@@ -1445,7 +1446,7 @@ impl Bank {
             } else {
                 // Save a snapshot of stakes for use in consensus and stake weighted networking
                 let leader_schedule_epoch = new.epoch_schedule().get_leader_schedule_epoch(slot);
-                new.update_epoch_stakes(leader_schedule_epoch);
+                new.update_epoch_stakes(leader_schedule_epoch, None);
             }
             new.distribute_partitioned_epoch_rewards();
         });
@@ -1720,6 +1721,7 @@ impl Bank {
             rewards_calculation,
             calculate_activated_stake_time_us,
             update_rewards_with_thread_pool_time_us,
+            vat_filterred_vote_accounts: distribution_epoch_vote_accounts,
         }
     }
 
@@ -1752,6 +1754,7 @@ impl Bank {
             rewards_calculation,
             calculate_activated_stake_time_us,
             update_rewards_with_thread_pool_time_us,
+            vat_filterred_vote_accounts,
         } = self.compute_new_epoch_caches_and_rewards(
             &thread_pool,
             parent_epoch,
@@ -1764,8 +1767,9 @@ impl Bank {
 
         // Save a snapshot of stakes for use in consensus and stake weighted networking
         let leader_schedule_epoch = self.epoch_schedule.get_leader_schedule_epoch(slot);
-        let (_, update_epoch_stakes_time_us) =
-            measure_us!(self.update_epoch_stakes(leader_schedule_epoch));
+        let (_, update_epoch_stakes_time_us) = measure_us!(
+            self.update_epoch_stakes(leader_schedule_epoch, Some(&vat_filterred_vote_accounts))
+        );
 
         // Distribute rewards commission to vote accounts and cache stake rewards
         // for partitioned distribution in the upcoming slots.
@@ -1837,7 +1841,7 @@ impl Bank {
         parent.freeze();
         let parent_timestamp = parent.clock().unix_timestamp;
         let mut new = Bank::new_from_parent(parent, leader, slot);
-        new.update_epoch_stakes(new.epoch_schedule().get_epoch(slot));
+        new.update_epoch_stakes(new.epoch_schedule().get_epoch(slot), None);
         new.tick_height.store(new.max_tick_height(), Relaxed);
 
         let mut clock = new.clock();
@@ -2386,7 +2390,11 @@ impl Bank {
         from_account(&self.get_account(&sysvar::slot_history::id()).unwrap()).unwrap()
     }
 
-    fn update_epoch_stakes(&mut self, leader_schedule_epoch: Epoch) {
+    fn update_epoch_stakes(
+        &mut self,
+        leader_schedule_epoch: Epoch,
+        vat_filterred_vote_accounts: Option<&VoteAccounts>,
+    ) {
         // update epoch_stakes cache
         //  if my parent didn't populate for this staker's epoch, we've
         //  crossed a boundary
@@ -2396,7 +2404,7 @@ impl Bank {
                 // to ensure we retain the oldest epoch, if that epoch is 0.
                 epoch >= leader_schedule_epoch.saturating_sub(MAX_LEADER_SCHEDULE_STAKES - 1)
             });
-            let stakes = self.get_top_epoch_stakes();
+            let stakes = self.get_top_epoch_stakes(vat_filterred_vote_accounts);
             let stakes = SerdeStakesToStakeFormat::from(stakes);
             let new_epoch_stakes = VersionedEpochStakes::new(stakes, leader_schedule_epoch);
             info!(
@@ -6098,19 +6106,7 @@ impl Bank {
 
     fn maybe_filter_vote_accounts_for_vat(&self, vote_accounts: &VoteAccounts) -> VoteAccounts {
         if self.feature_set.snapshot().validator_admission_ticket {
-            let vote_account_rent_exempt_minimum = self
-                .rent_collector
-                .rent
-                .minimum_balance(VoteStateV4::size_of());
-            let minimum_vote_account_balance = if self.feature_set.snapshot().alpenglow {
-                // When alpenglow is active the minimum required balance is
-                // VAT + rent-exempt minimum for vote account.
-                vote_account_rent_exempt_minimum + VAT_TO_BURN_PER_EPOCH
-            } else {
-                // If alpenglow is not active, the minimum required balance is
-                // rent-exempt minimum.
-                vote_account_rent_exempt_minimum
-            };
+            let minimum_vote_account_balance = self.minimum_vote_account_balance_for_vat();
             vote_accounts
                 .clone_and_filter_for_vat(MAX_ALPENGLOW_VOTE_ACCOUNTS, minimum_vote_account_balance)
         } else {
@@ -6122,27 +6118,38 @@ impl Bank {
     /// See `VoteAccounts::clone_and_filter_for_vat` for the full criteria
     ///
     /// If the VAT feature is not active, return all stakes
-    pub fn get_top_epoch_stakes(&self) -> Stakes<StakeAccount<Delegation>> {
+    pub fn get_top_epoch_stakes(
+        &self,
+        vat_filterred_vote_accounts: Option<&VoteAccounts>,
+    ) -> Stakes<StakeAccount<Delegation>> {
+        let minimum_vote_account_balance = self.minimum_vote_account_balance_for_vat();
+
+        if self.feature_set.snapshot().validator_admission_ticket
+            && vat_filterred_vote_accounts.is_some()
+        {
+            self.stakes_cache.stakes().clone_and_filter_for_vat(
+                MAX_ALPENGLOW_VOTE_ACCOUNTS,
+                minimum_vote_account_balance,
+                vat_filterred_vote_accounts.unwrap().clone(),
+            )
+        } else {
+            self.stakes_cache.stakes().clone()
+        }
+    }
+
+    fn minimum_vote_account_balance_for_vat(&self) -> u64 {
         let vote_account_rent_exempt_minimum = self
             .rent_collector
             .rent
             .minimum_balance(VoteStateV4::size_of());
         let feature_snapshot = self.feature_set.snapshot();
-        let minimum_vote_account_balance = if feature_snapshot.alpenglow {
+        if feature_snapshot.alpenglow {
             // When alpenglow is active the minimum required balance is
             // VAT + rent-exempt minimum for vote account.
             vote_account_rent_exempt_minimum + VAT_TO_BURN_PER_EPOCH
         } else {
             // If alpenglow is not active, the minimum required balance is rent-exempt-minimum
             vote_account_rent_exempt_minimum
-        };
-
-        if feature_snapshot.validator_admission_ticket {
-            self.stakes_cache
-                .stakes()
-                .clone_and_filter_for_vat(MAX_ALPENGLOW_VOTE_ACCOUNTS, minimum_vote_account_balance)
-        } else {
-            self.stakes_cache.stakes().clone()
         }
     }
 

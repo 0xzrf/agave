@@ -8,8 +8,8 @@ use {
     },
     crate::{
         bank::{
-            RewardCalcTracer, RewardCalculationEvent, RewardCommission, RewardCommissions,
-            RewardsMetrics, null_tracer,
+            MAX_ALPENGLOW_VOTE_ACCOUNTS, RewardCalcTracer, RewardCalculationEvent,
+            RewardCommission, RewardCommissions, RewardsMetrics, null_tracer,
         },
         inflation_rewards::{
             points::{CalculationEnvironment, DelegatedVoteState, PointValue, calculate_points},
@@ -234,12 +234,13 @@ impl Bank {
 
         let (num_stake_accounts, num_vote_accounts) = {
             let stakes = self.stakes_cache.stakes();
-            let filtered_vote_accounts =
-                self.maybe_filter_vote_accounts_for_vat(stakes.vote_accounts());
-            (
-                stakes.stake_delegations().len(),
-                filtered_vote_accounts.len(),
-            )
+            let filtered_vote_accounts_len = stakes
+                .vote_accounts()
+                .iter()
+                .filter(|va| va.1.lamports() > self.minimum_vote_account_balance_for_vat())
+                .count()
+                .min(MAX_ALPENGLOW_VOTE_ACCOUNTS);
+            (stakes.stake_delegations().len(), filtered_vote_accounts_len)
         };
         self.capitalization
             .fetch_add(total_reward_commissions, Relaxed);

@@ -186,11 +186,10 @@ impl<T: Clone> Stakes<T> {
         &self,
         max_vote_accounts: usize,
         minimum_vote_account_balance: u64,
+        vote_accounts: VoteAccounts,
     ) -> Stakes<T> {
         Stakes {
-            vote_accounts: self
-                .vote_accounts
-                .clone_and_filter_for_vat(max_vote_accounts, minimum_vote_account_balance),
+            vote_accounts,
             epoch: self.epoch,
             // Do not need anything else for EpochStakes
             stake_delegations: ImblHashMap::new(),
