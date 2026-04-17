@@ -6124,14 +6124,16 @@ impl Bank {
     ) -> Stakes<StakeAccount<Delegation>> {
         let minimum_vote_account_balance = self.minimum_vote_account_balance_for_vat();
 
-        if self.feature_set.snapshot().validator_admission_ticket
-            && vat_filterred_vote_accounts.is_some()
-        {
-            self.stakes_cache.stakes().clone_and_filter_for_vat(
-                MAX_ALPENGLOW_VOTE_ACCOUNTS,
-                minimum_vote_account_balance,
-                vat_filterred_vote_accounts.unwrap().clone(),
-            )
+        if self.feature_set.snapshot().validator_admission_ticket {
+            if let Some(vat_filterred_vote_accounts) = vat_filterred_vote_accounts {
+                return self.stakes_cache.stakes().clone_and_filter_for_vat(
+                    MAX_ALPENGLOW_VOTE_ACCOUNTS,
+                    minimum_vote_account_balance,
+                    vat_filterred_vote_accounts.clone(),
+                );
+            } else {
+                return self.stakes_cache.stakes().clone();
+            }
         } else {
             self.stakes_cache.stakes().clone()
         }
