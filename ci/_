@@ -5,8 +5,7 @@
 # |source| me
 #
 
-base_dir=$(realpath --strip "$(dirname "$0")/..")
-
+base_dir="$(cd "$(dirname "$0")/.." && pwd)"
 _() {
   if [[ $(pwd) = $base_dir ]]; then
     echo "--- $*" > /dev/stderr

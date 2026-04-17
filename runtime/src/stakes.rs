@@ -184,8 +184,8 @@ pub struct Stakes<T: Clone> {
 impl<T: Clone> Stakes<T> {
     pub fn clone_and_filter_for_vat(
         &self,
-        max_vote_accounts: usize,
-        minimum_vote_account_balance: u64,
+        _max_vote_accounts: usize,
+        _minimum_vote_account_balance: u64,
         vote_accounts: VoteAccounts,
     ) -> Stakes<T> {
         Stakes {
